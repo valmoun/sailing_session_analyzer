@@ -59,7 +59,7 @@ const MIN_SPEED_KTS = 3;
 const QUALITY_WIN   = 12;
 const POST_SKIP     = 8;
 
-function detectManeuvers(pts) {
+function detectManeuvers(pts, windDir) {
   const maneuvers = [];
   let prevSide = null;
 
@@ -91,9 +91,9 @@ function detectManeuvers(pts) {
       // 2. Cap du déplacement global pendant la transition
       const bearingGlobal = compassBearing(bPt, aPt);
       // 3. Récupération de la direction du vent courante
-      const wDir = parseFloat(document.getElementById('wind-dir').value) || 0;
+      // const wDir = parseFloat(document.getElementById('wind-dir').value) || 0;
       // 4. Angle du déplacement par rapport au vent (0 = face au vent, 180 = vent arrière)
-      const twaGlobal = trueWindAngle(bearingGlobal, wDir);
+      const twaGlobal = trueWindAngle(bearingGlobal, windDir);
 
       // 5. Projection : positif si on descend le vent (dérive), négatif si on remonte
       // On utilise -cos pour que : vers le vent = négatif (gain), sous le vent = positif (perte)

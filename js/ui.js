@@ -1,3 +1,6 @@
+import { state } from './state.js';
+import { generateInsights } from './insights.js';
+
 // SECTION 1 — MAP SETUP
 //   CartoDB Voyager  — fond global, mer bleue, détail élevé jusqu'au zoom 20
 //   OpenSeaMap       — marquages nautiques (toggle)
@@ -192,8 +195,20 @@ function updateCompass(windDir) {
   document.getElementById('compass-from').textContent = cardinalName(d);
   document.getElementById('compass-to').textContent   = cardinalName((d+180)%360);
 }
-document.getElementById('wind-dir').addEventListener('input', e=>updateCompass(parseFloat(e.target.value)||0));
-updateCompass(270);
+
+const input = document.getElementById('wind-dir');
+
+// init
+state.windDir = Number(input.value) || 0;
+updateCompass(state.windDir);
+
+// interaction utilisateur
+input.addEventListener('input', e => {
+  const value = Number(e.target.value) || 0;
+
+  state.windDir = value;
+  updateCompass(value);
+});
 
 // Sport tab clicks
 document.querySelectorAll('.sport-tab').forEach(btn => {

@@ -1,3 +1,8 @@
+import { state } from './state.js';
+import { parseGPX } from './gpx.js';
+import { enrichTrack, detectManeuvers, computeStats } from './analysis.js';
+import { compassBearing, trueWindAngle } from './geo.js';
+
 // Main analysis pipeline — runs on all sessions
 function runAnalysis() {
   if (!sessions.length) return;
@@ -9,7 +14,7 @@ function runAnalysis() {
       sessions.forEach(sess => {
         if (!sess.rawPoints) return;
         sess.pts       = enrichTrack(sess.rawPoints, windDir, currentSport);
-        sess.maneuvers = detectManeuvers(sess.pts);
+        sess.maneuvers = detectManeuvers(sess.pts, windDir);
         sess.stats     = computeStats(sess.pts, sess.maneuvers);
       });
       renderAllSessions();
