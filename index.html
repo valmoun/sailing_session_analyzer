@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <link rel="stylesheet" href="css/main.css">
+  <script src="js/app.js"></script>
+  <title>Sailing Session Analyzer</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🪁</text></svg>">
+
+  <!--
+    MAP LIBRARY — Leaflet 1.9 (Canvas/SVG, no Web Workers)
+    Leaflet renders synchronously on the main thread: works from file://, http://, https://.
+  -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+
+  <!--
+    FONTS — Bunny Fonts (GAFAM-free)
+    EU-hosted, GDPR-compliant open CDN. Identical API to Google Fonts.
+    Just swap the hostname — zero data sent to Google or any US corp.
+  -->
+  <link rel="preconnect" href="https://fonts.bunny.net"/>
+  <link href="https://fonts.bunny.net/css?family=bebas-neue:400|ibm-plex-mono:400,600|inter:400,500,600&display=swap" rel="stylesheet"/>
+</head>
+<body>
+
+<aside id="sidebar">
+  <div class="s-header">
+    <h1 id="app-title">🪁 Session Analyzer</h1>
+    <p>Local sailing GPX analyzer</p>
+  </div>
+
+  <!-- ① Sessions -->
+  <div class="section">
+    <div class="sec-title">① Sessions (GPX)</div>
+    <div id="drop-zone" onclick="document.getElementById('file-input').click()">
+      <div class="dz-icon">🗺️</div>
+      <p><strong>Drop .gpx files here</strong><br>or click · up to 6 sessions</p>
+    </div>
+    <input type="file" id="file-input" accept=".gpx,.xml" multiple/>
+    <div id="session-list"></div>
+  </div>
+
+  <!-- ② Sport -->
+  <div class="section">
+    <div class="sec-title">② Sport</div>
+    <div class="sport-tabs">
+      <button class="sport-tab active" data-sport="kitesurfing">🪁 Kitesurfing</button>
+      <button class="sport-tab"       data-sport="kitefoiling">🦅 Kitefoiling</button>
+      <button class="sport-tab"       data-sport="windsurfing">🏄 Windsurfing</button>
+      <button class="sport-tab"       data-sport="yacht">⛵ Yacht</button>
+    </div>
+  </div>
+
+  <!-- ③ Wind -->
+  <div class="section">
+    <div class="sec-title">③ Wind Conditions</div>
+    <div class="input-row">
+      <div class="ig">
+        <label>Direction (FROM °)</label>
+        <input type="number" id="wind-dir" min="0" max="360" value="270"/>
+      </div>
+      <div class="ig">
+        <label>Speed (knots)</label>
+        <input type="number" id="wind-speed" min="0" max="100" value="18"/>
+      </div>
+    </div>
+    <div id="wind-compass-wrap">
+      <div id="wind-compass">
+        <div class="compass-ring">
+          <span class="cardinal n">N</span><span class="cardinal s">S</span>
+          <span class="cardinal e">E</span><span class="cardinal w">W</span>
+          <div id="compass-arrow"></div>
+        </div>
+      </div>
+      <div class="compass-label">
+        <span>Wind FROM <strong id="compass-from">W</strong></span>
+        <span>&rarr; toward <strong id="compass-to">E</strong></span>
+      </div>
+    </div>
+    <div class="hint">270 = Westerly (from West). 0/360 = Northerly.</div>
+    <button id="analyze-btn" disabled>⚡ Analyse All Sessions</button>
+  </div>
+
+  <!-- ④ Stats -->
+  <div class="section" id="stats-panel">
+    <div class="sec-title">④ Stats &mdash; <span id="active-sess-name" style="text-transform:none;font-weight:400;color:var(--text-muted)"></span></div>
+    <div class="stat-grid">
+
+      <div class="stat-card">
+        <div class="lbl">Top Speed</div>
+        <div class="val" id="s-top">—</div>
+        <div class="sub">knots</div>
+      </div>
+      <div class="stat-card">
+        <div class="lbl">Moving Avg</div>
+        <div class="val" id="s-avg">—</div>
+        <div class="sub">knots</div>
+      </div>
+
+      <!-- Sliding-window best averages.
+           Best Xs = highest mean speed over any consecutive Xs window.
+           More meaningful than a single-point peak (noise-resistant). -->
+      <div class="stat-card">
+        <div class="lbl">Best 10 s avg</div>
+        <div class="val" id="s-b10">—</div>
+        <div class="sub">knots</div>
+      </div>
+      <div class="stat-card">
+        <div class="lbl">Best 30 s avg</div>
+        <div class="val" id="s-b30">—</div>
+        <div class="sub">knots</div>
+      </div>
+      <div class="stat-card">
+        <div class="lbl">Best 1 min avg</div>
+        <div class="val" id="s-b60">—</div>
+        <div class="sub">knots</div>
+      </div>
+      <div class="stat-card">
+        <div class="lbl">Distance</div>
+        <div class="val" id="s-dist">—</div>
+        <div class="sub">nautical miles</div>
+      </div>
+
+      <div class="stat-card full">
+        <div class="lbl">Duration</div>
+        <div class="val" id="s-dur" style="font-size:1rem">—</div>
+      </div>
+
+      <div class="stat-card full">
+        <div class="lbl">Time by Point of Sail</div>
+        <div class="sail-bar">
+          <div class="sb-up"  id="sb-up"></div>
+          <div class="sb-rch" id="sb-rch"></div>
+          <div class="sb-dwn" id="sb-dwn"></div>
+        </div>
+        <div class="sail-legend">
+          <span>⬆ Upwind <b id="sp-up">—</b>%</span>
+          <span>↔ Reach <b id="sp-rch">—</b>%</span>
+          <span>⬇ Downwind <b id="sp-dwn">—</b>%</span>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="lbl">Best VMG Upwind</div>
+        <div class="val" id="s-vmgu">—</div>
+        <div class="sub">knots toward wind</div>
+      </div>
+      <div class="stat-card">
+        <div class="lbl">Best VMG Downwind</div>
+        <div class="val" id="s-vmgd">—</div>
+        <div class="sub">knots away wind</div>
+      </div>
+      <div class="stat-card">
+        <div class="lbl">Best Upwind Angle</div>
+        <div class="val" id="s-ua">—</div>
+        <div class="sub">° TWA at peak VMG</div>
+      </div>
+      <div class="stat-card">
+        <div class="lbl">Best Downwind Angle</div>
+        <div class="val" id="s-da">—</div>
+        <div class="sub">° TWA at peak VMG</div>
+      </div>
+
+      <!-- Kite/foil: unified "Transitions" (no tack/gybe split) -->
+      <div class="stat-card full" id="man-kite" style="display:none">
+        <div class="lbl" id="man-kite-lbl">Transitions</div>
+        <div style="display:flex;gap:14px;margin-top:5px;flex-wrap:wrap">
+          <div><div class="val" id="s-trans">—</div><div class="sub">count</div></div>
+          <div><div class="val" id="s-trans-dur">—</div><div class="sub">avg duration (s)</div></div>
+          <div><div class="val" id="s-trans-drift">—</div><div class="sub">avg drift (m)</div></div>
+        </div>
+      </div>
+
+      <!-- Windsurf/yacht: separate tack / gybe cards -->
+      <div class="stat-card" id="man-tack" style="display:none">
+        <div class="lbl">Tacks 🔵</div>
+        <div class="val" id="s-tacks">—</div>
+        <div class="sub" id="s-tq"></div>
+      </div>
+      <div class="stat-card" id="man-gybe" style="display:none">
+        <div class="lbl">Gybes 🟠</div>
+        <div class="val" id="s-gybes">—</div>
+        <div class="sub" id="s-gq"></div>
+      </div>
+
+    </div><!-- .stat-grid -->
+
+    <div class="toggle-row" style="margin-top:9px">
+      <div class="tgl-btn active" id="tgl-speed" onclick="setColorMode('speed')">🎨 Speed</div>
+      <div class="tgl-btn"        id="tgl-pos"   onclick="setColorMode('pos')">⛵ Point of Sail</div>
+    </div>
+    <div class="speed-leg" id="leg-speed">
+      <span>Slow</span><div class="bar"></div><span>Fast</span>
+    </div>
+    <div class="pos-leg" id="leg-pos">
+      <div class="pos-leg-item"><div class="pos-leg-dot" style="background:#0ea5e9"></div>Upwind</div>
+      <div class="pos-leg-item"><div class="pos-leg-dot" style="background:#22c55e"></div>Reach</div>
+      <div class="pos-leg-item"><div class="pos-leg-dot" style="background:#f59e0b"></div>Downwind</div>
+    </div>
+    <div class="map-note" id="map-note">🟢 Start · 🔴 End · markers on map</div>
+
+    <div style="margin-top:11px">
+      <div class="sec-title">💡 Coaching Insights</div>
+      <div id="insights-wrap"></div>
+    </div>
+  </div>
+
+  <footer class="s-footer">
+    <p>
+      © Valentin Mounier —
+      <a href="https://github.com/valmoun" target="_blank">GitHub</a>
+    </p>
+  </footer>
+</aside>
+
+<div id="map-area">
+  <div id="map"></div>
+  <div id="osm-toggle" class="active" onclick="toggleSeaMap()" title="Toggle nautical chart overlay">⚓ Nautical</div>
+  <div id="loading">
+    <div class="ld-spinner"></div>
+    <div class="ld-text">Analysing…</div>
+  </div>
+</div>
+
+<script>
+
+</script>
+</body>
+</html>

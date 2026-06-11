@@ -1,0 +1,795 @@
+'use strict';
+
+// SECTION 1 — MAP SETUP
+//   CartoDB Voyager  — fond global, mer bleue, détail élevé jusqu'au zoom 20
+//   OpenSeaMap       — marquages nautiques (toggle)
+
+const cartoVoyager = L.tileLayer(
+  'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+  {
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>',
+    subdomains: 'abcd',
+    maxZoom: 20,
+  }
+);
+
+const seaMap = L.tileLayer(
+  'https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png',
+  {
+    attribution: '© <a href="https://www.openseamap.org">OpenSeaMap</a>',
+    maxZoom: 18,
+    opacity: 0.8,
+  }
+);
+
+const map = L.map('map', { center:[40,0], zoom:3, layers:[cartoVoyager, seaMap] });
+
+// Independent layer groups for clean clearing / redrawing
+const trackLayer  = L.layerGroup().addTo(map); // session polylines
+const arrowLayer  = L.layerGroup().addTo(map); // direction arrows (active session)
+const markerLayer = L.layerGroup().addTo(map); // start/end/maneuver markers
+
+let seaMapVisible = true;
+function toggleSeaMap() {
+  seaMapVisible = !seaMapVisible;
+  seaMapVisible ? map.addLayer(seaMap) : map.removeLayer(seaMap);
+  document.getElementById('osm-toggle').classList.toggle('active', seaMapVisible);
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   SECTION 2 — GPX PARSER
+   Reads a GPX XML string → array of raw track points.
+   { lat, lon, time, ele, speedGPS }   speedGPS in m/s or null.
+═══════════════════════════════════════════════════════════════ */
+
+function parseGPX(xmlText) {
+  const xml = new DOMParser().parseFromString(xmlText, 'text/xml');
+  if (xml.querySelector('parsererror')) throw new Error('Invalid XML — not a valid GPX file.');
+  const trkpts = xml.querySelectorAll('trkpt');
+  if (!trkpts.length) throw new Error('No <trkpt> elements — is this a track file?');
+
+  const pts = [];
+  trkpts.forEach(pt => {
+    const lat = parseFloat(pt.getAttribute('lat'));
+    const lon = parseFloat(pt.getAttribute('lon'));
+    if (isNaN(lat) || isNaN(lon)) return;
+    const timeEl  = pt.querySelector('time');
+    const eleEl   = pt.querySelector('ele');
+    const speedEl = pt.querySelector('speed') || pt.querySelector('gpxtpx\\:speed') || pt.querySelector('ns3\\:speed');
+    pts.push({
+      lat, lon,
+      time:     timeEl  ? new Date(timeEl.textContent.trim()) : null,
+      ele:      eleEl   ? parseFloat(eleEl.textContent)       : null,
+      speedGPS: speedEl ? parseFloat(speedEl.textContent)     : null,
+    });
+  });
+  if (pts.length < 2) throw new Error('Need at least 2 valid track points.');
+  return pts;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   SECTION 3 — GEOGRAPHIC & PHYSICS UTILITIES
+   Pure math — no side effects.
+═══════════════════════════════════════════════════════════════ */
+
+const EARTH_R_M     = 6_371_000;
+const M_S_TO_KTS    = 1.94384;
+const M_PER_NM      = 1852;
+const MIN_DIST_M    = 1.5;
+const MAX_SPEED_KTS = 65;
+
+function haversineDistance(p1, p2) {
+  const r = d => d * Math.PI / 180;
+  const dLat = r(p2.lat-p1.lat), dLon = r(p2.lon-p1.lon);
+  const a = Math.sin(dLat/2)**2 + Math.cos(r(p1.lat))*Math.cos(r(p2.lat))*Math.sin(dLon/2)**2;
+  return EARTH_R_M * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+function compassBearing(p1, p2) {
+  const r = d => d*Math.PI/180;
+  const dLon = r(p2.lon-p1.lon), la1=r(p1.lat), la2=r(p2.lat);
+  return (Math.atan2(Math.sin(dLon)*Math.cos(la2),
+          Math.cos(la1)*Math.sin(la2)-Math.sin(la1)*Math.cos(la2)*Math.cos(dLon))*180/Math.PI+360)%360;
+}
+
+// Smallest signed angle from a to b, in (-180, 180]
+function angleDiff(a, b) {
+  let d = (b-a+360)%360;
+  return d > 180 ? d-360 : d;
+}
+
+// 0° = dead upwind, 90° = beam reach, 180° = dead downwind
+function trueWindAngle(heading, windDir)  { return Math.abs(angleDiff(heading, windDir)); }
+// Positive = wind from starboard (right side)
+function signedTWA(heading, windDir)      { return angleDiff(heading, windDir); }
+
+function pointOfSail(twa, upMax, dwnMin) {
+  if (twa < upMax)  return 'upwind';
+  if (twa < dwnMin) return 'reach';
+  return 'downwind';
+}
+
+function vmgUpwind(spd, twa)   { return spd * Math.cos(twa*Math.PI/180); }
+function vmgDownwind(spd, twa) { return spd * Math.cos((180-twa)*Math.PI/180); }
+
+function movingAvg(arr, half) {
+  return arr.map((_,i) => {
+    const lo=Math.max(0,i-half), hi=Math.min(arr.length-1,i+half);
+    let s=0; for(let j=lo;j<=hi;j++) s+=arr[j]; return s/(hi-lo+1);
+  });
+}
+
+// Circular moving average for bearings: averages via unit vectors
+// to correctly handle the 0°/360° wraparound.
+function circularMovingAvg(bearings, half) {
+  const r = d => d*Math.PI/180;
+  const sinA = movingAvg(bearings.map(b=>Math.sin(r(b))), half);
+  const cosA = movingAvg(bearings.map(b=>Math.cos(r(b))), half);
+  return bearings.map((_,i)=>(Math.atan2(sinA[i],cosA[i])*180/Math.PI+360)%360);
+}
+
+/*
+  BEST WINDOW AVERAGE — two-pointer sliding window, O(n).
+  Finds the highest mean speed over any consecutive Xs of data.
+  More meaningful than a single-point top speed (which can be
+  a GPS glitch). Speed-sailing competitions use the 500m / 10s formats.
+*/
+function bestWindowAvgKts(pts, windowSec) {
+  if (!pts[0]?.time) return null;
+  let best=0, lo=0, runSum=0;
+  for (let hi=0; hi<pts.length; hi++) {
+    runSum += pts[hi].speedKts;
+    while ((pts[hi].time - pts[lo].time)/1000 > windowSec) { runSum -= pts[lo].speedKts; lo++; }
+    best = Math.max(best, runSum/(hi-lo+1));
+  }
+  return best > 0 ? Math.round(best*10)/10 : null;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   SECTION 4 — SPORT CONFIGURATION
+   All sport-specific constants live here.  The rest of the code
+   reads from SPORT_CONFIG[sport] rather than scattering if/else.
+
+   kiteMode:true  → maneuvers called "transitions", show duration+drift
+   kiteMode:false → separate tack/gybe with speed-quality metric
+═══════════════════════════════════════════════════════════════ */
+
+const SPORT_CONFIG = {
+  // Twin-tip/Wave: Upwind is harder (~60°). Downwind requires crossing at angles (~140°).
+  kitesurfing: { label:'Kitesurfing', emoji:'🪁', upMax:60,  dwnMin:130, kiteMode:true,  manLabel:'Transitions', speedMax:35 },
+  
+  // Kitefoil: Elite hydrofoils point insanely high (~42°) and push ultra deep downwind (~140°).
+  kitefoiling: { label:'Kitefoiling', emoji:'🦅', upMax:46,  dwnMin:135, kiteMode:true,  manLabel:'Transitions', speedMax:48 },
+  
+  // Windsurfing (Slalom/Freeride): Can't pinch high upwind (~58°). Broad reaches deeply downwind (~135°).
+  windsurfing: { label:'Windsurfing', emoji:'🏄', upMax:55,  dwnMin:130, kiteMode:false, manLabel:'Tacks & Gybes', speedMax:45 },
+  
+  // Yacht (Performance Monohull): Upwind targets are tight (~43°). Downwind asymmetric angles hover around 142°.
+  yacht:       { label:'Yacht',       emoji:'⛵', upMax:45,  dwnMin:140, kiteMode:false, manLabel:'Tacks & Gybes', speedMax:15 },
+};
+
+let currentSport = 'kitesurfing';
+
+
+/* ═══════════════════════════════════════════════════════════════
+   SECTION 5 — TRACK ENRICHMENT
+   Annotates every raw GPX point with derived physics fields.
+   Passes sport so point-of-sail thresholds are sport-correct.
+
+   Added fields: distM, dtSec, speedRaw, speedMS, speedKts,
+                 bearing, bearingSmooth, twa, twaSign, pos,
+                 vmgUp, vmgDown
+═══════════════════════════════════════════════════════════════ */
+
+function enrichTrack(rawPts, windDir, sport) {
+  const { upMax, dwnMin } = SPORT_CONFIG[sport];
+  const pts = rawPts.map(p=>({...p}));
+
+  // Pass 1: distance, bearing, raw speed
+  pts.forEach((p,i) => {
+    if (i===0) { p.distM=0; p.dtSec=0; p.speedRaw=0; p.bearing=0; return; }
+    const prev = pts[i-1];
+    p.distM = haversineDistance(prev, p);
+    p.dtSec = (p.time&&prev.time) ? (p.time-prev.time)/1000 : 0;
+    p.speedRaw = (p.speedGPS!=null&&p.speedGPS>=0)
+      ? p.speedGPS
+      : (p.dtSec>0.1 ? p.distM/p.dtSec : (prev.speedRaw||0));
+    p.bearing = (p.distM>MIN_DIST_M) ? compassBearing(prev,p) : (prev.bearing||0);
+  });
+
+  // Pass 2: smooth speed + bearing (removes GPS noise spikes)
+  const sSpd = movingAvg(pts.map(p=>p.speedRaw), 4);
+  const sBrg = circularMovingAvg(pts.map(p=>p.bearing), 5);
+  pts.forEach((p,i) => {
+    p.speedMS       = Math.min(sSpd[i], MAX_SPEED_KTS/M_S_TO_KTS);
+    p.speedKts      = p.speedMS * M_S_TO_KTS;
+    p.bearingSmooth = sBrg[i];
+  });
+
+  // Pass 3: wind physics
+  pts.forEach(p => {
+    p.twa     = trueWindAngle(p.bearingSmooth, windDir);
+    p.twaSign = signedTWA(p.bearingSmooth, windDir);
+    p.pos     = pointOfSail(p.twa, upMax, dwnMin);
+    p.vmgUp   = vmgUpwind(p.speedKts,   p.twa);
+    p.vmgDown = vmgDownwind(p.speedKts, p.twa);
+  });
+
+  return pts;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   SECTION 6 — MANEUVER DETECTION
+   Watches for tack-side flips (sign change in twaSign).
+   Each maneuver records BOTH quality metrics so the UI can choose:
+     quality        → % speed kept (windsurf/yacht)
+     transitionSec  → duration in seconds (kite)
+     transitionDistM → distance drifted during the maneuver (kite)
+═══════════════════════════════════════════════════════════════ */
+
+const MIN_SPEED_KTS = 3;
+const QUALITY_WIN   = 12;
+const POST_SKIP     = 8;
+
+function detectManeuvers(pts) {
+  const maneuvers = [];
+  let prevSide = null;
+
+  for (let i=3; i<pts.length-3; i++) {
+    const p = pts[i];
+    if (p.speedKts < MIN_SPEED_KTS) { prevSide=null; continue; }
+
+    const side = p.twaSign >= 0 ? 'stbd' : 'port';
+    if (prevSide !== null && side !== prevSide) {
+
+      const slice  = pts.slice(Math.max(0,i-4), Math.min(pts.length,i+4));
+      const avgTWA = slice.reduce((s,q)=>s+q.twa,0)/slice.length;
+      const type   = avgTWA < 90 ? 'tack' : 'gybe';
+
+      // Speed quality (sail sports)
+      const before  = pts.slice(Math.max(0,i-QUALITY_WIN), i);
+      const after   = pts.slice(i+1, Math.min(pts.length,i+1+QUALITY_WIN));
+      const avgSpd  = arr => arr.length ? arr.reduce((s,q)=>s+q.speedKts,0)/arr.length : 0;
+      const spBefore = avgSpd(before), spAfter = avgSpd(after);
+      const quality  = spBefore > 1 ? Math.min(100,Math.round((spAfter/spBefore)*100)) : null;
+
+      // Transition metrics (kite sports avec projection sur l'axe du vent)
+      const bPt = pts[Math.max(0,i-POST_SKIP)];
+      const aPt = pts[Math.min(pts.length-1,i+POST_SKIP)];
+      const transitionSec = (bPt.time&&aPt.time) ? Math.round((aPt.time-bPt.time)/1000) : null;
+
+      // 1. Distance brute entre l'entrée et la sortie
+      const distRaw = haversineDistance(bPt, aPt);
+      // 2. Cap du déplacement global pendant la transition
+      const bearingGlobal = compassBearing(bPt, aPt);
+      // 3. Récupération de la direction du vent courante
+      const wDir = parseFloat(document.getElementById('wind-dir').value) || 0;
+      // 4. Angle du déplacement par rapport au vent (0 = face au vent, 180 = vent arrière)
+      const twaGlobal = trueWindAngle(bearingGlobal, wDir);
+
+      // 5. Projection : positif si on descend le vent (dérive), négatif si on remonte
+      // On utilise -cos pour que : vers le vent = négatif (gain), sous le vent = positif (perte)
+      const transitionDistM = Math.round(-distRaw * Math.cos(twaGlobal * Math.PI / 180));
+
+      maneuvers.push({
+        type, index:i, lat:p.lat, lon:p.lon, time:p.time,
+        speedBefore:Math.round(spBefore*10)/10,
+        speedAfter: Math.round(spAfter*10)/10,
+        quality, transitionSec, transitionDistM,
+      });
+
+      i += POST_SKIP;
+      prevSide = null;
+      continue;
+    }
+    prevSide = side;
+  }
+  return maneuvers;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   SECTION 7 — STATISTICS ENGINE
+   Aggregates enriched points + maneuvers → flat stats object.
+═══════════════════════════════════════════════════════════════ */
+
+const MOVING_KTS = 2.5;
+
+function computeStats(pts, maneuvers) {
+  const movPts = pts.filter(p=>p.speedKts>MOVING_KTS);
+  const speeds = movPts.map(p=>p.speedKts);
+
+  const topSpeed = speeds.length ? Math.max(...speeds) : 0;
+  const avgSpeed = speeds.length ? speeds.reduce((a,b)=>a+b,0)/speeds.length : 0;
+
+  const best10s = bestWindowAvgKts(movPts, 10);
+  const best30s = bestWindowAvgKts(movPts, 30);
+  const best60s = bestWindowAvgKts(movPts, 60);
+
+  const totalNM = pts.reduce((s,p)=>s+(p.distM||0),0) / M_PER_NM;
+  const timed   = pts.filter(p=>p.time);
+  const durSec  = timed.length>=2 ? (timed[timed.length-1].time-timed[0].time)/1000 : 0;
+
+  const counts = { upwind:0, reach:0, downwind:0 };
+  movPts.forEach(p=>counts[p.pos]++);
+  const N = movPts.length||1;
+  const sailPct = {
+    upwind:  Math.round(counts.upwind  /N*100),
+    reach:   Math.round(counts.reach   /N*100),
+    downwind:Math.round(counts.downwind/N*100),
+  };
+
+  const upPts  = movPts.filter(p=>p.pos==='upwind');
+  const dwnPts = movPts.filter(p=>p.pos==='downwind');
+  const bestVMGUp   = upPts.length  ? Math.max(...upPts.map(p=>p.vmgUp))    : 0;
+  const bestVMGDown = dwnPts.length ? Math.max(...dwnPts.map(p=>p.vmgDown)) : 0;
+  const bestUpAngle  = upPts.length  ? Math.round(upPts.reduce((a,b)=>a.vmgUp>b.vmgUp?a:b).twa)     : null;
+  const bestDwnAngle = dwnPts.length ? Math.round(dwnPts.reduce((a,b)=>a.vmgDown>b.vmgDown?a:b).twa) : null;
+
+  const tacks = maneuvers.filter(m=>m.type==='tack');
+  const gybes = maneuvers.filter(m=>m.type==='gybe');
+  const mean  = arr => arr.length ? Math.round(arr.reduce((a,b)=>a+b,0)/arr.length) : null;
+  const avgTackQ     = mean(tacks.map(t=>t.quality).filter(q=>q!=null));
+  const avgGybeQ     = mean(gybes.map(g=>g.quality).filter(q=>q!=null));
+  const avgTransSec  = mean(maneuvers.map(m=>m.transitionSec).filter(v=>v!=null));
+  const avgTransDst  = mean(maneuvers.map(m=>m.transitionDistM));
+
+  return {
+    topSpeed:    Math.round(topSpeed*10)/10,
+    avgSpeed:    Math.round(avgSpeed*10)/10,
+    best10s, best30s, best60s,
+    totalNM:     Math.round(totalNM*10)/10,
+    durSec, sailPct,
+    bestVMGUp:   Math.round(bestVMGUp*10)/10,
+    bestVMGDown: Math.round(bestVMGDown*10)/10,
+    bestUpAngle, bestDwnAngle,
+    tackCount:tacks.length, gybeCount:gybes.length,
+    transCount:maneuvers.length,
+    avgTackQ, avgGybeQ, avgTransSec, avgTransDst,
+  };
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   SECTION 8 — COACHING INSIGHTS (sport-aware)
+═══════════════════════════════════════════════════════════════ */
+
+function generateInsights(stats, sport) {
+  const cfg  = SPORT_CONFIG[sport];
+  const tips = [];
+  const { topSpeed, avgSpeed, sailPct, bestUpAngle, bestDwnAngle,
+          avgTackQ, avgGybeQ, avgTransSec, avgTransDst } = stats;
+
+  // Speed
+  if (topSpeed > cfg.speedMax*0.85)
+    tips.push({level:'good',text:`🚀 Top speed ${topSpeed} kts — excellent power generation for ${cfg.label}!`});
+  else if (topSpeed>0 && topSpeed<cfg.speedMax*0.4)
+    tips.push({level:'warn',text:`🌬️ Top speed ${topSpeed} kts is low. Check equipment size vs wind conditions.`});
+
+  if (avgSpeed>0 && topSpeed>0) {
+    const r = avgSpeed/topSpeed;
+    if (r>=0.65)  tips.push({level:'good',text:`🎯 Speed consistency: avg is ${Math.round(r*100)}% of top. Great session control.`});
+    else if (r<0.42) tips.push({level:'info',text:`📉 Large gap avg (${avgSpeed}) vs top (${topSpeed} kts). Work on sustaining power.`});
+  }
+
+  // Angles
+  if (bestUpAngle!==null) {
+    if      (bestUpAngle<38) tips.push({level:'good',text:`⬆️ Upwind angle ${bestUpAngle}° — exceptional close-hauled pointing!`});
+    else if (bestUpAngle<52) tips.push({level:'good',text:`⬆️ Upwind angle ${bestUpAngle}° is solid. Try depowering to point higher.`});
+    else                     tips.push({level:'info',text:`⬆️ Upwind angle ${bestUpAngle}° is wide. Ease bar/sheet and rake back more.`});
+  }
+  if (bestDwnAngle!==null) {
+    if (bestDwnAngle>155)    tips.push({level:'warn',text:`⬇️ Running very deep (${bestDwnAngle}°). ${cfg.kiteMode?'Kites':'Sails'} stall near dead downwind — gybe earlier for VMG.`});
+    else if (bestDwnAngle<120) tips.push({level:'info',text:`⬇️ Downwind angle ${bestDwnAngle}° — try going deeper for better VMG.`});
+    else                     tips.push({level:'good',text:`⬇️ Downwind angle ${bestDwnAngle}° — good VMG corridor.`});
+  }
+
+  // Maneuvers
+  if (cfg.kiteMode) {
+    if (avgTransSec!==null) {
+      if      (avgTransSec<=3) tips.push({level:'good',text:`🔄 Avg transition ${avgTransSec} s — lightning fast!`});
+      else if (avgTransSec<=6) tips.push({level:'info',text:`🔄 Avg transition ${avgTransSec} s. Tighten the kite arc through the window.`});
+      else                     tips.push({level:'warn',text:`🔄 Avg transition ${avgTransSec} s is slow. Practice faster kite movements.`});
+    }
+    if (avgTransDst!==null && avgTransDst>30)
+      tips.push({level:'info',text:`📐 Avg drift ${avgTransDst} m during transitions — work on tighter loops.`});
+  } else {
+    if (avgTackQ!==null) {
+      if      (avgTackQ>=75) tips.push({level:'good',text:`🔵 Tack quality ${avgTackQ}% — great speed retention through tacks.`});
+      else if (avgTackQ>=55) tips.push({level:'info',text:`🔵 Tack quality ${avgTackQ}% — focus on faster rig flip and weight shift.`});
+      else                   tips.push({level:'warn',text:`🔵 Tack quality ${avgTackQ}% — significant loss. Stay powered longer before flipping.`});
+    }
+    if (avgGybeQ!==null) {
+      if      (avgGybeQ>=80) tips.push({level:'good',text:`🟠 Gybe quality ${avgGybeQ}% — smooth, powerful gybes!`});
+      else if (avgGybeQ>=60) tips.push({level:'info',text:`🟠 Gybe quality ${avgGybeQ}% — carve earlier and commit harder.`});
+      else                   tips.push({level:'warn',text:`🟠 Gybe quality ${avgGybeQ}% — losing too much speed. Loop the boom/kite earlier.`});
+    }
+  }
+
+  if (sailPct.upwind<15 && stats.transCount>=2)
+    tips.push({level:'info',text:`📐 Only ${sailPct.upwind}% upwind time. Practise VMG beats to sharpen upwind technique.`});
+
+  if (!tips.length)
+    tips.push({level:'info',text:'📋 Set wind direction and click Analyse to see personalised tips.'});
+
+  return tips;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   SECTION 9 — MAP RENDERING  (Leaflet)
+
+   renderAllSessions():
+     Active session  → speed/POS-coloured segments + direction arrows + markers
+     Other sessions  → solid polyline in session palette colour at 55% opacity
+
+   Direction arrows:
+     SVG upward triangle every ARROW_EVERY_M metres of track.
+     CSS transform:rotate() aligns arrow with bearingSmooth.
+     pointer-events:none so arrows don't block map interactions.
+═══════════════════════════════════════════════════════════════ */
+
+let colorMode = 'speed';
+const POS_COLOR = { upwind:'#0ea5e9', reach:'#22c55e', downwind:'#f59e0b' };
+const ARROW_EVERY_M = 130;
+
+function speedColor(t) {
+  t = Math.max(0,Math.min(1,t));
+  const s = [[59,130,246],[34,197,94],[245,158,11],[239,68,68]];
+  const x=t*(s.length-1), lo=Math.floor(x), hi=Math.min(s.length-1,lo+1), f=x-lo;
+  return 'rgb('+s[lo].map((c,j)=>Math.round(c+f*(s[hi][j]-c))).join(',')+')';
+}
+
+function trackColor(pt, minSpd, spdRange) {
+  return colorMode==='pos' ? (POS_COLOR[pt.pos]||'#888') : speedColor((pt.speedKts-minSpd)/spdRange);
+}
+
+/*
+  Direction arrows: we place a small SVG arrowhead every ARROW_EVERY_M metres.
+  Distance-based spacing avoids clustering in slow areas (which point-index
+  spacing would cause). The SVG points north at 0 deg; CSS rotate() turns it
+  to match the smoothed bearing, avoiding the 0/360 wraparound issue a
+  manual sin/cos approach would need.
+*/
+function renderArrows(pts, minSpd, spdRange) {
+  let distAcc = 0;
+  for (let i=1; i<pts.length-1; i++) {
+    distAcc += pts[i].distM || 0;
+    if (distAcc < ARROW_EVERY_M) continue;
+    if (pts[i].speedKts < 2.5)  { distAcc=0; continue; }
+    distAcc = 0;
+
+    const color   = trackColor(pts[i], minSpd, spdRange);
+    const bearing = pts[i].bearingSmooth;
+
+    L.marker([pts[i].lat, pts[i].lon], {
+      icon: L.divIcon({
+        html: `<svg style="pointer-events:none;transform:rotate(${bearing}deg);display:block"
+                 width="8" height="12" viewBox="0 0 8 12">
+                 <polygon points="4,0 7.5,12 4,9 0.5,12" fill="${color}" opacity="0.82"/>
+               </svg>`,
+        className: 'arrow-icon',
+        iconSize:  [8,12],
+        iconAnchor:[4,6],
+      }),
+      keyboard: false,
+    }).addTo(arrowLayer);
+  }
+}
+
+function renderAllSessions() {
+  trackLayer.clearLayers();
+  arrowLayer.clearLayers();
+  markerLayer.clearLayers();
+
+  sessions.forEach(sess => {
+    if (!sess.visible || !sess.pts) return;
+    const isActive = sess.id === activeSessionId;
+    const pts = sess.pts;
+    const speeds = pts.map(p=>p.speedKts);
+    const minSpd  = Math.min(...speeds);
+    const spdRange = (Math.max(...speeds)-minSpd) || 1;
+
+    if (isActive) {
+      // Active: per-segment colour + arrows
+      for (let i=1; i<pts.length; i++) {
+        L.polyline([[pts[i-1].lat,pts[i-1].lon],[pts[i].lat,pts[i].lon]], {
+          color: trackColor(pts[i],minSpd,spdRange), weight:3.5, opacity:0.92, smoothFactor:1,
+        }).addTo(trackLayer);
+      }
+      renderArrows(pts, minSpd, spdRange);
+    } else {
+      // Inactive: solid session-colour polyline
+      L.polyline(pts.map(p=>[p.lat,p.lon]),
+        { color:sess.color, weight:2.5, opacity:0.55, smoothFactor:1 }
+      ).addTo(trackLayer);
+    }
+  });
+
+  // Markers for active session only
+  const active = getActiveSession();
+  if (!active?.pts) return;
+
+  const addDot = (lat,lon,color,tip,r=8) =>
+    L.circleMarker([lat,lon],{radius:r,color,fillColor:color,fillOpacity:1,weight:2})
+     .bindTooltip(tip,{direction:'top'}).addTo(markerLayer);
+
+  addDot(active.pts[0].lat, active.pts[0].lon, '#22c55e','🟢 Start', 9);
+  addDot(active.pts[active.pts.length-1].lat, active.pts[active.pts.length-1].lon, '#ef4444','🔴 End', 9);
+
+  const cfg = SPORT_CONFIG[currentSport];
+  (active.maneuvers||[]).forEach((m,idx) => {
+    const isTack = m.type==='tack';
+    const color  = isTack ? '#38bdf8' : '#fb923c';
+    const label  = cfg.kiteMode ? `🔄 Transition #${idx+1}` : (isTack?`🔵 Tack #${idx+1}`:`🟠 Gybe #${idx+1}`);
+    let driftText = '?';
+    if (m.transitionDistM != null) {
+      // Si la dérive est positive : perte de terrain (Rouge). Si négative : gain (Vert).
+      const colorSpan = m.transitionDistM > 0 ? 'color:#ef4444' : 'color:#22c55e';
+      driftText = `<span style="${colorSpan}; font-weight:bold;">${m.transitionDistM}m</span>`;
+    }
+
+    const tip = label +
+      (m.time ? `<br>🕐 ${m.time.toLocaleTimeString()}` : '') +
+      (cfg.kiteMode
+        ? `<br>Duration: ${m.transitionSec??'?'} s · Drift: ${driftText}`
+        : `<br>${m.speedBefore} kts → ${m.speedAfter} kts · Quality: ${m.quality??'?'}%`);
+    addDot(m.lat, m.lon, color, tip, 6);
+  });
+}
+
+function setColorMode(mode) {
+  colorMode = mode;
+  document.getElementById('tgl-speed').classList.toggle('active', mode==='speed');
+  document.getElementById('tgl-pos').classList.toggle('active',   mode==='pos');
+  document.getElementById('leg-speed').style.display = mode==='speed' ? 'flex' : 'none';
+  document.getElementById('leg-pos').style.display   = mode==='pos'   ? 'flex' : 'none';
+  renderAllSessions();
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   SECTION 10 — SESSION MANAGEMENT
+   In-memory store — everything gone when the tab closes.
+   No data ever leaves the browser.
+
+   Up to 6 sessions, each with a unique palette colour.
+   Clicking a session row in the sidebar makes it "active"
+   (stats panel and markers update to reflect it).
+═══════════════════════════════════════════════════════════════ */
+
+const PALETTE = ['#00c4ff','#fb923c','#a78bfa','#22c55e','#f472b6','#facc15'];
+const sessions = [];
+let activeSessionId  = null;
+let sessionIdCounter = 0;
+
+function getActiveSession() { return sessions.find(s=>s.id===activeSessionId)??null; }
+
+function addSession(name, rawPts) {
+  if (sessions.length >= 6) { alert('Maximum 6 sessions — remove one first.'); return null; }
+  const id    = sessionIdCounter++;
+  const color = PALETTE[sessions.length % PALETTE.length];
+  const sess  = { id, name, color, rawPoints:rawPts, pts:null, maneuvers:null, stats:null, visible:true };
+  sessions.push(sess);
+  activeSessionId = id;
+  renderSessionList();
+  return sess;
+}
+
+function removeSession(id) {
+  const idx = sessions.findIndex(s=>s.id===id);
+  if (idx<0) return;
+  sessions.splice(idx,1);
+  if (activeSessionId===id) activeSessionId = sessions.length ? sessions[sessions.length-1].id : null;
+  renderSessionList(); renderAllSessions();
+  const act = getActiveSession();
+  if (act?.stats) updateUI(act.stats, act.maneuvers);
+  else document.getElementById('stats-panel').style.display = 'none';
+}
+
+function toggleSessionVis(id) {
+  const s = sessions.find(s=>s.id===id);
+  if (s) { s.visible=!s.visible; renderSessionList(); renderAllSessions(); }
+}
+
+function setActiveSession(id) {
+  activeSessionId = id;
+  renderSessionList(); renderAllSessions();
+  const act = getActiveSession();
+  if (act?.stats) updateUI(act.stats, act.maneuvers);
+}
+
+function renderSessionList() {
+  const list = document.getElementById('session-list');
+  list.style.display = sessions.length ? 'flex' : 'none';
+  list.innerHTML = '';
+  sessions.forEach(s => {
+    const item = document.createElement('div');
+    item.className = 'sess-item'+(s.id===activeSessionId?' active':'');
+    item.innerHTML = `
+      <div class="sess-dot" style="background:${s.color}"></div>
+      <div class="sess-name" title="${s.name}">${s.name}</div>
+      <button class="sess-btn" title="${s.visible?'Hide':'Show'}">${s.visible?'👁':'🙈'}</button>
+      <button class="sess-btn" title="Remove">✕</button>`;
+    item.addEventListener('click', e=>{ if(!e.target.closest('button')) setActiveSession(s.id); });
+    const [vBtn,dBtn] = item.querySelectorAll('.sess-btn');
+    vBtn.addEventListener('click',e=>{e.stopPropagation();toggleSessionVis(s.id);});
+    dBtn.addEventListener('click',e=>{e.stopPropagation();removeSession(s.id);});
+    list.appendChild(item);
+  });
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   SECTION 11 — UI CONTROLLER
+   Wires DOM events → analysis pipeline → visual output.
+═══════════════════════════════════════════════════════════════ */
+
+const setText = (id, v) => {
+  const el = document.getElementById(id);
+  if (el) el.textContent = (v!=null&&v!=='') ? v : '—';
+};
+
+function fmtDuration(sec) {
+  sec = Math.round(sec);
+  const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60), s=sec%60;
+  return h ? `${h}h ${m}m ${s}s` : `${m}m ${s}s`;
+}
+
+function cardinalName(deg) {
+  return ['N','NE','E','SE','S','SW','W','NW'][Math.round(((deg%360)+360)%360/45)%8];
+}
+
+// Wind compass visual
+function updateCompass(windDir) {
+  const d = ((windDir%360)+360)%360;
+  document.getElementById('compass-arrow').style.transform = `translateX(-50%) translateY(-100%) rotate(${d}deg)`;
+  document.getElementById('compass-from').textContent = cardinalName(d);
+  document.getElementById('compass-to').textContent   = cardinalName((d+180)%360);
+}
+document.getElementById('wind-dir').addEventListener('input', e=>updateCompass(parseFloat(e.target.value)||0));
+updateCompass(270);
+
+// Sport tab clicks
+document.querySelectorAll('.sport-tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.sport-tab').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    currentSport = btn.dataset.sport;
+    const cfg = SPORT_CONFIG[currentSport];
+    document.getElementById('app-title').textContent = `${cfg.emoji} ${cfg.label} Analyzer`;
+    if (sessions.some(s=>s.rawPoints)) runAnalysis();
+  });
+});
+
+// Update all stat cards
+function updateUI(stats, maneuvers) {
+  document.getElementById('stats-panel').style.display = 'block';
+  const cfg = SPORT_CONFIG[currentSport];
+  setText('active-sess-name', getActiveSession()?.name??'');
+
+  setText('s-top',  stats.topSpeed);
+  setText('s-avg',  stats.avgSpeed);
+  setText('s-b10',  stats.best10s);
+  setText('s-b30',  stats.best30s);
+  setText('s-b60',  stats.best60s);
+  setText('s-dist', stats.totalNM);
+  setText('s-dur',  fmtDuration(stats.durSec));
+
+  document.getElementById('sb-up').style.width  = stats.sailPct.upwind   + '%';
+  document.getElementById('sb-rch').style.width = stats.sailPct.reach    + '%';
+  document.getElementById('sb-dwn').style.width = stats.sailPct.downwind + '%';
+  setText('sp-up',  stats.sailPct.upwind);
+  setText('sp-rch', stats.sailPct.reach);
+  setText('sp-dwn', stats.sailPct.downwind);
+
+  setText('s-vmgu', stats.bestVMGUp);
+  setText('s-vmgd', stats.bestVMGDown);
+  setText('s-ua',   stats.bestUpAngle);
+  setText('s-da',   stats.bestDwnAngle);
+
+  const kE = document.getElementById('man-kite');
+  const tE = document.getElementById('man-tack');
+  const gE = document.getElementById('man-gybe');
+
+  if (cfg.kiteMode) {
+    kE.style.display = 'block'; tE.style.display = gE.style.display = 'none';
+    setText('man-kite-lbl',  cfg.manLabel);
+    setText('s-trans',       stats.transCount);
+    setText('s-trans-dur',   stats.avgTransSec);
+    setText('s-trans-drift', stats.avgTransDst);
+  } else {
+    kE.style.display = 'none'; tE.style.display = gE.style.display = 'block';
+    setText('s-tacks', stats.tackCount);
+    setText('s-gybes', stats.gybeCount);
+    setText('s-tq', stats.avgTackQ!=null ? `avg ${stats.avgTackQ}% speed kept` : '');
+    setText('s-gq', stats.avgGybeQ!=null ? `avg ${stats.avgGybeQ}% speed kept` : '');
+  }
+
+  const manNote = cfg.kiteMode ? '🔄 Transitions' : '🔵 Tacks · 🟠 Gybes';
+  setText('map-note', `🟢 Start · 🔴 End · ${manNote}`);
+
+  const tips = generateInsights(stats, currentSport);
+  const wrap = document.getElementById('insights-wrap');
+  wrap.innerHTML = '';
+  tips.forEach(tip => {
+    const d = document.createElement('div');
+    d.className = `insight ${tip.level}`;
+    d.textContent = tip.text;
+    wrap.appendChild(d);
+  });
+}
+
+// Main analysis pipeline — runs on all sessions
+function runAnalysis() {
+  if (!sessions.length) return;
+  const windDir = parseFloat(document.getElementById('wind-dir').value)||0;
+  document.getElementById('loading').style.display = 'flex';
+
+  requestAnimationFrame(()=>setTimeout(()=>{
+    try {
+      sessions.forEach(sess => {
+        if (!sess.rawPoints) return;
+        sess.pts       = enrichTrack(sess.rawPoints, windDir, currentSport);
+        sess.maneuvers = detectManeuvers(sess.pts);
+        sess.stats     = computeStats(sess.pts, sess.maneuvers);
+      });
+      renderAllSessions();
+      const act = getActiveSession();
+      if (act?.stats) updateUI(act.stats, act.maneuvers);
+      const allPts = sessions.flatMap(s=>s.visible&&s.pts?s.pts:[]);
+      if (allPts.length) map.fitBounds(L.latLngBounds(allPts.map(p=>[p.lat,p.lon])),{padding:[30,30]});
+    } catch(err) {
+      alert('Analysis error: '+err.message);
+      console.error('[Sailing Analyzer]',err);
+    } finally {
+      document.getElementById('loading').style.display = 'none';
+    }
+  }, 30));
+}
+
+// File loading
+function loadGPXFile(file) {
+  const reader = new FileReader();
+  reader.onerror = ()=>alert('Could not read: '+file.name);
+  reader.onload = e => {
+    try {
+      const rawPts = parseGPX(e.target.result);
+      const sess   = addSession(file.name, rawPts);
+      if (!sess) return;
+      document.getElementById('analyze-btn').disabled = false;
+      // Quick preview before analysis
+      L.polyline(rawPts.map(p=>[p.lat,p.lon]),{color:sess.color,weight:2,opacity:0.5}).addTo(trackLayer);
+      map.fitBounds(L.latLngBounds(rawPts.map(p=>[p.lat,p.lon])),{padding:[30,30]});
+    } catch(err) { alert(`Could not load ${file.name}: ${err.message}`); }
+  };
+  reader.readAsText(file);
+}
+
+// Event listeners
+document.getElementById('file-input').addEventListener('change', e=>{
+  [...e.target.files].forEach(loadGPXFile);
+  e.target.value='';
+});
+
+const dz = document.getElementById('drop-zone');
+dz.addEventListener('dragover',  e=>{e.preventDefault();dz.classList.add('over');});
+dz.addEventListener('dragleave', ()=>dz.classList.remove('over'));
+dz.addEventListener('drop', e=>{
+  e.preventDefault(); dz.classList.remove('over');
+  const gpxFiles = [...e.dataTransfer.files].filter(f=>/\.(gpx|xml)$/i.test(f.name));
+  if (!gpxFiles.length) { alert('Please drop .gpx files.'); return; }
+  gpxFiles.forEach(loadGPXFile);
+});
+
+document.getElementById('analyze-btn').addEventListener('click', runAnalysis);
+
+['wind-dir','wind-speed'].forEach(id=>{
+  document.getElementById(id).addEventListener('change',()=>{
+    if (sessions.some(s=>s.rawPoints)) runAnalysis();
+  });
+});
