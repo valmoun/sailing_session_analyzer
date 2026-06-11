@@ -1,3 +1,13 @@
+export const state = {
+  sessions: [],
+  activeSessionId: null,
+  sessionIdCounter: 0,
+  currentSport: 'kitesurfing',
+  windDir: 0,
+};
+
+
+
 /* ═══════════════════════════════════════════════════════════════
    SECTION 4 — SPORT CONFIGURATION
    All sport-specific constants live here.  The rest of the code
@@ -40,26 +50,42 @@ let sessionIdCounter = 0;
 
 function getActiveSession() { return sessions.find(s=>s.id===activeSessionId)??null; }
 
-function addSession(name, rawPts) {
-  if (sessions.length >= 6) { alert('Maximum 6 sessions — remove one first.'); return null; }
-  const id    = sessionIdCounter++;
-  const color = PALETTE[sessions.length % PALETTE.length];
-  const sess  = { id, name, color, rawPoints:rawPts, pts:null, maneuvers:null, stats:null, visible:true };
-  sessions.push(sess);
-  activeSessionId = id;
-  renderSessionList();
+export function addSession(name, rawPts) {
+  if (state.sessions.length >= 6) return null;
+
+  const id = state.sessionIdCounter++;
+  const color = PALETTE[state.sessions.length % PALETTE.length];
+
+  const sess = {
+    id,
+    name,
+    color,
+    rawPoints: rawPts,
+    pts: null,
+    maneuvers: null,
+    stats: null,
+    visible: true
+  };
+
+  state.sessions.push(sess);
+  state.activeSessionId = id;
+
   return sess;
 }
 
-function removeSession(id) {
-  const idx = sessions.findIndex(s=>s.id===id);
-  if (idx<0) return;
-  sessions.splice(idx,1);
-  if (activeSessionId===id) activeSessionId = sessions.length ? sessions[sessions.length-1].id : null;
-  renderSessionList(); renderAllSessions();
-  const act = getActiveSession();
-  if (act?.stats) updateUI(act.stats, act.maneuvers);
-  else document.getElementById('stats-panel').style.display = 'none';
+export function removeSession(id) {
+  const idx = state.sessions.findIndex(s => s.id === id);
+  if (idx < 0) return null;
+
+  state.sessions.splice(idx, 1);
+
+  if (state.activeSessionId === id) {
+    state.activeSessionId = state.sessions.length
+      ? state.sessions[state.sessions.length - 1].id
+      : null;
+  }
+
+  return state.activeSessionId;
 }
 
 function toggleSessionVis(id) {
@@ -73,32 +99,3 @@ function setActiveSession(id) {
   const act = getActiveSession();
   if (act?.stats) updateUI(act.stats, act.maneuvers);
 }
-
-function renderSessionList() {
-  const list = document.getElementById('session-list');
-  list.style.display = sessions.length ? 'flex' : 'none';
-  list.innerHTML = '';
-  sessions.forEach(s => {
-    const item = document.createElement('div');
-    item.className = 'sess-item'+(s.id===activeSessionId?' active':'');
-    item.innerHTML = `
-      <div class="sess-dot" style="background:${s.color}"></div>
-      <div class="sess-name" title="${s.name}">${s.name}</div>
-      <button class="sess-btn" title="${s.visible?'Hide':'Show'}">${s.visible?'👁':'🙈'}</button>
-      <button class="sess-btn" title="Remove">✕</button>`;
-    item.addEventListener('click', e=>{ if(!e.target.closest('button')) setActiveSession(s.id); });
-    const [vBtn,dBtn] = item.querySelectorAll('.sess-btn');
-    vBtn.addEventListener('click',e=>{e.stopPropagation();toggleSessionVis(s.id);});
-    dBtn.addEventListener('click',e=>{e.stopPropagation();removeSession(s.id);});
-    list.appendChild(item);
-  });
-}
-
-/*
-export const state = {
-  sessions: [],
-  currentSport: 'kitesurfing',
-  windDir: 0,
-  colorMode: 'speed'
-};
-*/

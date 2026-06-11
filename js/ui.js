@@ -1,3 +1,25 @@
+// A ranger
+
+export function renderSessionList(sessions, activeId) {
+  const list = document.getElementById('session-list');
+  list.style.display = sessions.length ? 'flex' : 'none';
+  list.innerHTML = '';
+  sessions.forEach(s => {
+    const item = document.createElement('div');
+    item.className = 'sess-item'+(s.id === activeId ? ' active' : '');
+    item.innerHTML = `
+      <div class="sess-dot" style="background:${s.color}"></div>
+      <div class="sess-name" title="${s.name}">${s.name}</div>
+      <button class="sess-btn" title="${s.visible?'Hide':'Show'}">${s.visible?'👁':'🙈'}</button>
+      <button class="sess-btn" title="Remove">✕</button>`;
+
+    
+    list.appendChild(item);
+  });
+}
+
+// Fin des trucs à ranger
+
 import { state } from './state.js';
 import { generateInsights } from './insights.js';
 

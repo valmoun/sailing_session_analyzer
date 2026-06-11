@@ -4,9 +4,8 @@ import { enrichTrack, detectManeuvers, computeStats } from './analysis.js';
 import { compassBearing, trueWindAngle } from './geo.js';
 
 // Main analysis pipeline — runs on all sessions
-function runAnalysis() {
+function runAnalysis(windDir) {
   if (!sessions.length) return;
-  const windDir = parseFloat(document.getElementById('wind-dir').value)||0;
   document.getElementById('loading').style.display = 'flex';
 
   requestAnimationFrame(()=>setTimeout(()=>{
@@ -38,8 +37,11 @@ function loadGPXFile(file) {
   reader.onload = e => {
     try {
       const rawPts = parseGPX(e.target.result);
-      const sess   = addSession(file.name, rawPts);
+      const sess = addSession(file.name, rawPts);
       if (!sess) return;
+
+      renderSessionList(state.sessions, state.activeSessionId);
+
       document.getElementById('analyze-btn').disabled = false;
       // Quick preview before analysis
       L.polyline(rawPts.map(p=>[p.lat,p.lon]),{color:sess.color,weight:2,opacity:0.5}).addTo(trackLayer);
@@ -69,6 +71,6 @@ document.getElementById('analyze-btn').addEventListener('click', runAnalysis);
 
 ['wind-dir','wind-speed'].forEach(id=>{
   document.getElementById(id).addEventListener('change',()=>{
-    if (sessions.some(s=>s.rawPoints)) runAnalysis();
+    if (sessions.some(s=>s.rawPoints)) runAnalysis(windDir);
   });
 });
