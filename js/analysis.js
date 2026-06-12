@@ -1,14 +1,9 @@
-/* ═══════════════════════════════════════════════════════════════
-   SECTION 5 — TRACK ENRICHMENT
-   Annotates every raw GPX point with derived physics fields.
-   Passes sport so point-of-sail thresholds are sport-correct.
+import { SPORT_CONFIG } from './config.js';
+import { haversineDistance, compassBearing, angleDiff, trueWindAngle, signedTWA,
+         pointOfSail, vmgUpwind, vmgDownwind,
+         movingAvg, circularMovingAvg, bestWindowAvgKts, MIN_DIST_M, MAX_SPEED_KTS, M_S_TO_KTS, M_PER_NM } from './geo.js';
 
-   Added fields: distM, dtSec, speedRaw, speedMS, speedKts,
-                 bearing, bearingSmooth, twa, twaSign, pos,
-                 vmgUp, vmgDown
-═══════════════════════════════════════════════════════════════ */
-
-function enrichTrack(rawPts, windDir, sport) {
+export function enrichTrack(rawPts, windDir, sport) {
   const { upMax, dwnMin } = SPORT_CONFIG[sport];
   const pts = rawPts.map(p=>({...p}));
 
@@ -59,7 +54,7 @@ const MIN_SPEED_KTS = 3;
 const QUALITY_WIN   = 12;
 const POST_SKIP     = 8;
 
-function detectManeuvers(pts, windDir) {
+export function detectManeuvers(pts, windDir) {
   const maneuvers = [];
   let prevSide = null;
 
@@ -123,7 +118,7 @@ function detectManeuvers(pts, windDir) {
 
 const MOVING_KTS = 2.5;
 
-function computeStats(pts, maneuvers) {
+export function computeStats(pts, maneuvers) {
   const movPts = pts.filter(p=>p.speedKts>MOVING_KTS);
   const speeds = movPts.map(p=>p.speedKts);
 

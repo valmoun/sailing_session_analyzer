@@ -1,10 +1,4 @@
-/* ═══════════════════════════════════════════════════════════════
-   SECTION 2 — GPX PARSER
-   Reads a GPX XML string → array of raw track points.
-   { lat, lon, time, ele, speedGPS }   speedGPS in m/s or null.
-═══════════════════════════════════════════════════════════════ */
-
-function parseGPX(xmlText) {
+export function parseGPX(xmlText) {
   const xml = new DOMParser().parseFromString(xmlText, 'text/xml');
   if (xml.querySelector('parsererror')) throw new Error('Invalid XML — not a valid GPX file.');
   const trkpts = xml.querySelectorAll('trkpt');

@@ -12,4 +12,4 @@ export const SPORT_CONFIG = {
   yacht:       { label:'Yacht',       emoji:'⛵', upMax:45,  dwnMin:140, kiteMode:false, manLabel:'Tacks & Gybes', speedMax:15 },
 };
 
-const PALETTE = ['#00c4ff','#fb923c','#a78bfa','#22c55e','#f472b6','#facc15'];
+export const PALETTE = ['#00c4ff','#fb923c','#a78bfa','#22c55e','#f472b6','#facc15'];

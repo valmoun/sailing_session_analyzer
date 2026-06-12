@@ -1,8 +1,9 @@
 /* ═══════════════════════════════════════════════════════════════
    SECTION 8 — COACHING INSIGHTS (sport-aware)
 ═══════════════════════════════════════════════════════════════ */
+import { SPORT_CONFIG } from './config.js';
 
-function generateInsights(stats, sport) {
+export function generateInsights(stats, sport) {
   const cfg  = SPORT_CONFIG[sport];
   const tips = [];
   const { topSpeed, avgSpeed, sailPct, bestUpAngle, bestDwnAngle,
