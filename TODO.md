@@ -6,6 +6,8 @@
 
 ## Production
 - [ ] Responsive for smartphones
+- [ ] Eloigner les flèches en fonction du niv de zoom
+- [ ] Ne pas recalculer tout a chaUe nouveau chiffre entre dans le winddir 
 - [x] Creating proper workflow
 - [x] Learning production basics
 - [x] Learning github pages
