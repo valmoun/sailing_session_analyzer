@@ -1,4 +1,5 @@
 import { SPORT_CONFIG } from './config.js';
+import { state } from './state.js';
 
 // ── Tile layers ──────────────────────────────────────────────
 const cartoVoyager = L.tileLayer(
@@ -22,7 +23,7 @@ const markerLayer = L.layerGroup().addTo(map);
 let colorMode = 'speed';
 
 // ── Color helpers ────────────────────────────────────────────
-const POS_COLOR = { upwind: '#38bdf8', reach: '#a78bfa', downwind: '#fb923c' };
+const POS_COLOR = { upwind: '#2be90e', reach: '#04abff', downwind: '#f5880b' };
 
 function speedColor(t) {
   t = Math.max(0, Math.min(1, t));
@@ -71,7 +72,7 @@ function addDot(lat, lon, color, tipHtml, radius = 6) {
 }
 
 // ── Main render ──────────────────────────────────────────────
-export function renderAllSessions(state) {
+export function renderAllSessions() {
   trackLayer.clearLayers();
   arrowLayer.clearLayers();
   markerLayer.clearLayers();
@@ -140,9 +141,5 @@ export function addRawPreview(rawPts, color) {
 
 export function setColorMode(mode) {
   colorMode = mode;
-  document.getElementById('tgl-speed').classList.toggle('active', mode === 'speed');
-  document.getElementById('tgl-pos').classList.toggle('active',   mode === 'pos');
-  document.getElementById('leg-speed').style.display = mode === 'speed' ? 'flex' : 'none';
-  document.getElementById('leg-pos').style.display   = mode === 'pos'   ? 'flex' : 'none';
-  // caller passes state so we can re-render
+  renderAllSessions();
 }

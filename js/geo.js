@@ -31,6 +31,7 @@ export function angleDiff(a, b) {
 
 // 0° = dead upwind, 90° = beam reach, 180° = dead downwind
 export function trueWindAngle(heading, windDir)  { return Math.abs(angleDiff(heading, windDir)); }
+
 // Positive = wind from starboard (right side)
 export function signedTWA(heading, windDir)      { return angleDiff(heading, windDir); }
 

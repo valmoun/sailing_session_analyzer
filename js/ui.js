@@ -105,8 +105,7 @@ export function updateUI(stats, maneuvers, currentSport) {
   });
 }
 
-export function setColorMode(mode) {
-  const colorMode = mode;
+export function updateColorModeUI (mode) {
   document.getElementById('tgl-speed').classList.toggle('active', mode==='speed');
   document.getElementById('tgl-pos').classList.toggle('active',   mode==='pos');
   document.getElementById('leg-speed').style.display = mode==='speed' ? 'flex' : 'none';

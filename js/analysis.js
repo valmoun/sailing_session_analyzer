@@ -37,6 +37,14 @@ export function enrichTrack(rawPts, windDir, sport) {
     p.vmgDown = vmgDownwind(p.speedKts, p.twa);
   });
 
+  const dist = {upwind:0, reach:0, downwind:0};
+  pts.forEach(p => dist[p.pos]++);
+  console.table(dist);
+  console.log(
+    'TWA sample (every 20th pt):',
+    pts.filter((_,i)=>i%20===0).map(p=>Math.round(p.twa))
+  );
+
   return pts;
 }
 

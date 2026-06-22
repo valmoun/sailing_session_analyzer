@@ -1,6 +1,6 @@
 export const SPORT_CONFIG = {
-  // Twin-tip/Wave: Upwind is harder (~60°). Downwind requires crossing at angles (~140°).
-  kitesurfing: { label:'Kitesurfing', emoji:'🪁', upMax:60,  dwnMin:130, kiteMode:true,  manLabel:'Transitions', speedMax:35 },
+  // Twin-tip/Wave: Upwind is harder
+  kitesurfing: { label:'Kitesurfing', emoji:'🪁', upMax:87,  dwnMin:100, kiteMode:true,  manLabel:'Transitions', speedMax:35 },
   
   // Kitefoil: Elite hydrofoils point insanely high (~42°) and push ultra deep downwind (~140°).
   kitefoiling: { label:'Kitefoiling', emoji:'🦅', upMax:46,  dwnMin:135, kiteMode:true,  manLabel:'Transitions', speedMax:48 },

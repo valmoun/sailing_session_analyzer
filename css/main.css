@@ -164,9 +164,9 @@ body {
 
 /* Point of sail bar */
 .sail-bar { display:flex; height:8px; border-radius:4px; overflow:hidden; margin:7px 0 3px; background:var(--border); }
-.sail-bar .sb-up  { background:#0ea5e9; transition:width .5s; }
-.sail-bar .sb-rch { background:#22c55e; transition:width .5s .05s; }
-.sail-bar .sb-dwn { background:#f59e0b; transition:width .5s .1s; }
+.sail-bar .sb-up  { background:#2be90e; transition:width .5s; }
+.sail-bar .sb-rch { background:#04abff; transition:width .5s .05s; }
+.sail-bar .sb-dwn { background:#f5880b; transition:width .5s .1s; }
 .sail-legend { display:flex; justify-content:space-between; font-size:.58rem; color:var(--text-muted); }
 
 /* Colour-by toggle */
@@ -180,7 +180,7 @@ body {
 
 .speed-leg { display:flex; align-items:center; gap:6px; margin-top:9px; font-size:.62rem; color:var(--text-muted); }
 .speed-leg .bar { flex:1; height:5px; border-radius:3px; background:linear-gradient(to right,#3b82f6,#22c55e,#f59e0b,#ef4444); }
-.pos-leg { display:none; align-items:center; gap:9px; margin-top:9px; font-size:.62rem; color:var(--text-muted); }
+.pos-leg { display:none; align-items:center; justify-content: center; gap:9px; margin-top:9px; font-size:.62rem; color:var(--text-muted); }
 .pos-leg-item { display:flex; align-items:center; gap:4px; }
 .pos-leg-dot  { width:7px; height:7px; border-radius:50%; }
 .map-note { font-size:.58rem; color:var(--text-dim); text-align:center; margin-top:5px; }

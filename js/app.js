@@ -6,9 +6,10 @@ import { parseGPX }                     from './gpx.js';
 import { enrichTrack, detectManeuvers,
          computeStats }                 from './analysis.js';
 import { renderSessionList, updateUI, 
-         updateCompass, setColorMode }                from './ui.js';
+         updateCompass, updateColorModeUI } from './ui.js';
 import { renderAllSessions,
-         fitMapToBounds, addRawPreview } from './map.js';
+         fitMapToBounds, addRawPreview,
+         setColorMode }                 from './map.js';
 
 // ── Analysis pipeline ────────────────────────────────────────
 export function runAnalysis() {
@@ -102,9 +103,14 @@ document.querySelectorAll('.sport-tab').forEach(btn => {
 });
 
 // Color mode toggles
-document.getElementById('tgl-speed').addEventListener('click', () => setColorMode('speed'));
-document.getElementById('tgl-pos').addEventListener('click', () => setColorMode('pos'));
-//does not renderAllSessions afterwards so no visible effect, TO FIX
+document.getElementById('tgl-speed').addEventListener('click', () => {
+  setColorMode('speed');
+  updateColorModeUI('speed');
+});
+document.getElementById('tgl-pos').addEventListener('click', () => {
+  setColorMode('pos');
+  updateColorModeUI('pos');
+});
 
 // Session list interactions — delegated to avoid re-binding on each render
 document.getElementById('session-list').addEventListener('click', e => {
