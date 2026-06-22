@@ -1,6 +1,6 @@
 import { PALETTE } from './config.js';
 
-// Single source of truth — plain object for easy passing/testing
+// Single source of truth
 export const state = {
   sessions: [],
   activeSessionId: null,
@@ -39,10 +39,9 @@ export function removeSession(id) {
 export function toggleSessionVis(id) {
   const s = state.sessions.find(s => s.id === id);
   if (s) s.visible = !s.visible;
-  // No rendering here — caller is responsible
 }
 
 export function setActiveSession(id) {
   state.activeSessionId = id;
-  // No rendering here — caller is responsible
+
 }

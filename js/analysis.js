@@ -1,16 +1,24 @@
 import { SPORT_CONFIG } from './config.js';
+import { state } from './state.js';
 import { haversineDistance, compassBearing, angleDiff, trueWindAngle, signedTWA,
          pointOfSail, vmgUpwind, vmgDownwind,
          movingAvg, circularMovingAvg, bestWindowAvgKts, MIN_DIST_M, MAX_SPEED_KTS, M_S_TO_KTS, M_PER_NM } from './geo.js';
 
+// Constants for analysis
+// Speed threshold for movement detection (to ignore GPS noise when stationary)
 const MIN_SPEED_KTS = 3;
+// Window size for speed quality calculation around maneuvers (in points)
 const QUALITY_WIN   = 12;
+// Number of points to skip after a maneuver to avoid counting the maneuver itself in transition metrics
 const POST_SKIP     = 8;
+// Consider removing, redundancy with MIN_SPEED_KTS, but can be useful to have a separate threshold for maneuver detection vs general movement analysis
 const MOVING_KTS = 2.5;
+const MAX_UPWIND_TRANSITION_M = 10; // Maximum distance gain considered for upwind transitions (for quality scoring)
+const MAX_DOWNWIND_TRANSITION_M = 40; // Maximum distance loss considered for downwind transitions (for quality scoring)
 
 // Enriches a track with additional computed properties
-export function enrichTrack(rawPts, windDir, sport) {
-  const { upMax, dwnMin } = SPORT_CONFIG[sport];
+export function enrichTrack(rawPts) {
+  const { upMax, dwnMin } = SPORT_CONFIG[state.currentSport];
   const pts = rawPts.map(p=>({...p}));
 
   // Pass 1: distance, bearing, raw speed
@@ -36,13 +44,15 @@ export function enrichTrack(rawPts, windDir, sport) {
 
   // Pass 3: wind physics
   pts.forEach(p => {
-    p.twa     = trueWindAngle(p.bearingSmooth, windDir);
-    p.twaSign = signedTWA(p.bearingSmooth, windDir);
+    p.twa     = trueWindAngle(p.bearingSmooth, state.windDir);
+    p.twaSign = signedTWA(p.bearingSmooth, state.windDir);
     p.pos     = pointOfSail(p.twa, upMax, dwnMin);
     p.vmgUp   = vmgUpwind(p.speedKts,   p.twa);
     p.vmgDown = vmgDownwind(p.speedKts, p.twa);
   });
 
+  // Log des points pour debug les angles upwind/reach/downwind
+  /*
   const dist = {upwind:0, reach:0, downwind:0};
   pts.forEach(p => dist[p.pos]++);
   console.table(dist);
@@ -50,55 +60,84 @@ export function enrichTrack(rawPts, windDir, sport) {
     'TWA sample (every 20th pt):',
     pts.filter((_,i)=>i%20===0).map(p=>Math.round(p.twa))
   );
-
+  */
   return pts;
 }
 
-export function detectManeuvers(pts, windDir, sport) {
+// Detection and analysis of maneuvers (tacks and gybes)
+export function detectManeuvers(pts) {
   const maneuvers = [];
   let prevSide = null;
+  let side = null;
+  let quality = null;
 
   for (let i=3; i<pts.length-3; i++) {
     const p = pts[i];
-    if (p.speedKts < MIN_SPEED_KTS) { prevSide=null; continue; }
 
-    const side = p.twaSign >= 0 ? 'stbd' : 'port';
+    // Ignore low-speed points for maneuver detection
+    if (p.speedKts > MIN_SPEED_KTS) {
+          const side = p.twaSign >= 0 ? 'stbd' : 'port';
+    }
+
+    // Detect a change of direction (tack/gybe)
     if (prevSide !== null && side !== prevSide) {
-
+      // Look at reduced window of points around the maneuver
       const slice  = pts.slice(Math.max(0,i-4), Math.min(pts.length,i+4));
+      // Calculation of average angle of maneuver
       const avgTWA = slice.reduce((s,q)=>s+q.twa,0)/slice.length;
+      // Detection of type: tack if average TWA < 90°, gybe if average TWA > 90°
       const type   = avgTWA < 90 ? 'tack' : 'gybe';
 
-      // Speed quality (sail sports)
+      /*---------Speed quality (sail sports)---------*/
       const before  = pts.slice(Math.max(0,i-QUALITY_WIN), i);
       const after   = pts.slice(i+1, Math.min(pts.length,i+1+QUALITY_WIN));
       const avgSpd  = arr => arr.length ? arr.reduce((s,q)=>s+q.speedKts,0)/arr.length : 0;
       const spBefore = avgSpd(before), spAfter = avgSpd(after);
-      const quality  = spBefore > 1 ? Math.min(100,Math.round((spAfter/spBefore)*100)) : null;
+      //const quality  = spBefore > 1 ? Math.min(100,Math.round((spAfter/spBefore)*100)) : null;
+      const spdRatio = spBefore > 1 ? (spAfter-spBefore)/spBefore*100 : null;
 
-      // Transition metrics (kite sports avec projection sur l'axe du vent)
-      const bPt = pts[Math.max(0,i-POST_SKIP)];
-      const aPt = pts[Math.min(pts.length-1,i+POST_SKIP)];
-      const transitionSec = (bPt.time&&aPt.time) ? Math.round((aPt.time-bPt.time)/1000) : null;
+      /*---------Transition duration---------
+      const entryPt = pts[Math.max(0,i-POST_SKIP)];
+      const exitPt = pts[Math.min(pts.length-1,i+POST_SKIP)];
+      const transitionSec = (entryPt.time&&exitPt.time) ? Math.round((exitPt.time-entryPt.time)/1000) : null;*/
 
-      // 1. Distance brute entre l'entrée et la sortie
-      const distRaw = haversineDistance(bPt, aPt);
-      // 2. Cap du déplacement global pendant la transition
-      const bearingGlobal = compassBearing(bPt, aPt);
-      // 3. Récupération de la direction du vent courante
-      // const wDir = parseFloat(document.getElementById('wind-dir').value) || 0;
-      // 4. Angle du déplacement par rapport au vent (0 = face au vent, 180 = vent arrière)
-      const twaGlobal = trueWindAngle(bearingGlobal, windDir);
+      /*---------Lost/won distance along the wind axis---------*/
+      // Earlier point before maneuver, because maneuver detection takes a few points to confirm the change of direction
+      const entryPt = pts[Math.max(0,i-2*POST_SKIP)];
+      const exitPt = pts[Math.min(pts.length-1,i+POST_SKIP)];
+      // Raw distance between the two points, in meters
+      const distRaw = haversineDistance(entryPt, exitPt);
+      // Rough bearing between entry and exit points of the maneuver, in degrees
+      const bearingGlobal = compassBearing(entryPt, exitPt);
+      // True wind angle of the "maneuver", in degrees
+      // const angleToWind = trueWindAngle(bearingGlobal, state.windDir);
+      // Wind-relative angle between the maneuver and the wind direction, in degrees
+      const angleToWind = angleDiff(state.windDir, bearingGlobal);
+      // Distance along the wind axis, in meters (negative if lost distance, positive if gained)
+      // const transitionDistM = Math.round(-distRaw * Math.cos(angleToWind * Math.PI / 180));
+      const transitionDistM = Math.round(
+        -distRaw * Math.cos(angleToWind * Math.PI / 180)
+      );
 
-      // 5. Projection : positif si on descend le vent (dérive), négatif si on remonte
-      // On utilise -cos pour que : vers le vent = négatif (gain), sous le vent = positif (perte)
-      const transitionDistM = Math.round(-distRaw * Math.cos(twaGlobal * Math.PI / 180));
+      /*---------Calculate "quality score"---------*/
+      if (state.currentSport === 'kitesurfing') {
+        // Scale from 10m gain to 40m loss, with 0% at -40m and 100% at +10m
+        const score = Math.round(100 * (MAX_UPWIND_TRANSITION_M - transitionDistM) / (MAX_UPWIND_TRANSITION_M + MAX_DOWNWIND_TRANSITION_M));
+        quality = Math.max(0, Math.min(100, score));
+      }
+      else {
+        // For sail sports, quality is based on speed ratio
+        quality = spBefore > 1 ? Math.max(0, Math.min(100, Math.round((spAfter / spBefore) * 100))): null;
+      }
 
       maneuvers.push({
         type, index:i, lat:p.lat, lon:p.lon, time:p.time,
         speedBefore:Math.round(spBefore*10)/10,
         speedAfter: Math.round(spAfter*10)/10,
-        quality, transitionSec, transitionDistM,
+        quality,
+        speedRatio: Math.round(spdRatio),
+        //transitionSec,
+        transitionDistM,
       });
 
       i += POST_SKIP;

@@ -11,7 +11,7 @@ import { renderAllSessions,
          fitMapToBounds, addRawPreview,
          setColorMode }                 from './map.js';
 
-// ── Analysis pipeline ────────────────────────────────────────
+// Analysis pipeline
 export function runAnalysis() {
   if (!state.sessions.length) return;
   document.getElementById('loading').style.display = 'flex';
@@ -20,8 +20,8 @@ export function runAnalysis() {
     try {
       state.sessions.forEach(sess => {
         if (!sess.rawPoints) return;
-        sess.pts       = enrichTrack(sess.rawPoints, state.windDir, state.currentSport);
-        sess.maneuvers = detectManeuvers(sess.pts, state.windDir, state.currentSport);
+        sess.pts       = enrichTrack(sess.rawPoints);
+        sess.maneuvers = detectManeuvers(sess.pts);
         sess.stats     = computeStats(sess.pts, sess.maneuvers);
       });
 
@@ -40,7 +40,7 @@ export function runAnalysis() {
   }, 30));
 }
 
-// ── File loading ─────────────────────────────────────────────
+// File loading
 function loadGPXFile(file) {
   const reader = new FileReader();
   reader.onerror = () => alert('Could not read: ' + file.name);

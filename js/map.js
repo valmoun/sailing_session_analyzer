@@ -1,7 +1,7 @@
 import { SPORT_CONFIG } from './config.js';
 import { state } from './state.js';
 
-// ── Tile layers ──────────────────────────────────────────────
+/*------------Tile layers and map setup------------*/
 const cartoVoyager = L.tileLayer(
   'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
   { attribution: '© OpenStreetMap contributors © CARTO',
@@ -37,6 +37,17 @@ function trackColor(pt, minSpd, spdRange) {
   return colorMode === 'pos'
     ? (POS_COLOR[pt.pos] || '#888')
     : speedColor((pt.speedKts - minSpd) / spdRange);
+}
+
+// Calculate color on red-green scale based on t value in [0,1], where 0 is red and 1 is green
+function redGreenColor(t) {
+  t = Math.max(0, Math.min(1, t));
+
+  const r = Math.round(255 * (1 - t));
+  const g = Math.round(200 * t);
+  const b = 80;
+
+  return `rgb(${r},${g},${b})`;
 }
 
 // ── Arrow rendering ──────────────────────────────────────────
@@ -105,23 +116,30 @@ export function renderAllSessions() {
 
     // Maneuver dots (only for active session to avoid clutter)
     if (sess.id !== activeSessionId) return;
-    (sess.maneuvers || []).forEach((m, idx) => {
-      const isTack  = m.type === 'tack';
-      const color   = isTack ? '#38bdf8' : '#fb923c';
-      const label   = cfg.kiteMode
-        ? `🔄 Transition #${idx+1}`
-        : (isTack ? `🔵 Tack #${idx+1}` : `🟠 Gybe #${idx+1}`);
 
+    // Show maneuver dots
+    (sess.maneuvers || []).forEach((m, idx) => {
+      const label = cfg.kiteMode
+        ? `🔄 Transition #${idx+1}` : (m.type === 'tack' ? `Tack #${idx+1}` : `Gybe #${idx+1}`);
+
+      // Color based on quality score
+      const t = Math.pow(m.quality/100, 1.5);
+      const color = redGreenColor(t);
+      
+      // Display label of distance lost during maneuver
       let driftText = '?';
       if (m.transitionDistM != null) {
-        const colorSpan = m.transitionDistM > 0 ? 'color:#ef4444' : 'color:#22c55e';
+        const colorSpan = m.transitionDistM > 0
+          ? 'color:#ef4444'
+          : 'color:#22c55e';
+
         driftText = `<span style="${colorSpan};font-weight:bold">${m.transitionDistM}m</span>`;
       }
 
       const tip = label
         + (m.time ? `<br>🕐 ${m.time.toLocaleTimeString()}` : '')
         + (cfg.kiteMode
-          ? `<br>Duration: ${m.transitionSec ?? '?'}s · Drift: ${driftText}`
+          ? `<br>Duration: ${m.transitionSec ?? '?'}s · Drift: ${driftText} · Quality: ${m.quality ?? '?'}%`
           : `<br>${m.speedBefore} kts → ${m.speedAfter} kts · Quality: ${m.quality ?? '?'}%`);
 
       addDot(m.lat, m.lon, color, tip, 6);
