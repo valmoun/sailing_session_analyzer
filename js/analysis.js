@@ -3,6 +3,12 @@ import { haversineDistance, compassBearing, angleDiff, trueWindAngle, signedTWA,
          pointOfSail, vmgUpwind, vmgDownwind,
          movingAvg, circularMovingAvg, bestWindowAvgKts, MIN_DIST_M, MAX_SPEED_KTS, M_S_TO_KTS, M_PER_NM } from './geo.js';
 
+const MIN_SPEED_KTS = 3;
+const QUALITY_WIN   = 12;
+const POST_SKIP     = 8;
+const MOVING_KTS = 2.5;
+
+// Enriches a track with additional computed properties
 export function enrichTrack(rawPts, windDir, sport) {
   const { upMax, dwnMin } = SPORT_CONFIG[sport];
   const pts = rawPts.map(p=>({...p}));
@@ -48,21 +54,7 @@ export function enrichTrack(rawPts, windDir, sport) {
   return pts;
 }
 
-
-/* ═══════════════════════════════════════════════════════════════
-   SECTION 6 — MANEUVER DETECTION
-   Watches for tack-side flips (sign change in twaSign).
-   Each maneuver records BOTH quality metrics so the UI can choose:
-     quality        → % speed kept (windsurf/yacht)
-     transitionSec  → duration in seconds (kite)
-     transitionDistM → distance drifted during the maneuver (kite)
-═══════════════════════════════════════════════════════════════ */
-
-const MIN_SPEED_KTS = 3;
-const QUALITY_WIN   = 12;
-const POST_SKIP     = 8;
-
-export function detectManeuvers(pts, windDir) {
+export function detectManeuvers(pts, windDir, sport) {
   const maneuvers = [];
   let prevSide = null;
 
@@ -117,14 +109,6 @@ export function detectManeuvers(pts, windDir) {
   }
   return maneuvers;
 }
-
-
-/* ═══════════════════════════════════════════════════════════════
-   SECTION 7 — STATISTICS ENGINE
-   Aggregates enriched points + maneuvers → flat stats object.
-═══════════════════════════════════════════════════════════════ */
-
-const MOVING_KTS = 2.5;
 
 export function computeStats(pts, maneuvers) {
   const movPts = pts.filter(p=>p.speedKts>MOVING_KTS);

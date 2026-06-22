@@ -5,7 +5,8 @@
 - [ ] Fixing speed colors (putting a floor to the low speeds so that 5kt and lower appear plain blue)
 
 ## Production
-- [ ] Creating proper workflow
-- [ ] Learning production basics
-- [ ] Learning github pages
-- [ ] Pushing to a personal github domain
+- [ ] Responsive for smartphones
+- [x] Creating proper workflow
+- [x] Learning production basics
+- [x] Learning github pages
+- [x] Pushing to a personal github domain
