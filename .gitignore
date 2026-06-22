@@ -1,2 +1,3 @@
 data/*.gpx
 deploy-to-prod-branch.sh
+sailing_session_analyzer.code-workspace
