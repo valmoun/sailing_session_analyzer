@@ -136,6 +136,10 @@ export function renderAllSessions() {
         driftText = `<span style="${colorSpan};font-weight:bold">${m.transitionDistM}m</span>`;
       }
 
+      /* Update all of this :
+      - Kitesurf, kitefoil : drift only (+ quality)
+      - other : speed before/after (+ quality)
+      */
       const tip = label
         + (m.time ? `<br>🕐 ${m.time.toLocaleTimeString()}` : '')
         + (cfg.kiteMode
