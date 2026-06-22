@@ -1,68 +1,98 @@
-# 🪁 Sailing Session Analyzer
+# Sailing Session Analyzer
 
-A lightweight, high-performance, and **100% client-side** web application designed to analyze nautical GPS telemetry. Built specifically for boardsports and sailing, it translates raw GPX data into rich performance metrics, tactical wind physics, and map visualizations.
-
----
-
-## ⚡ Key Features
-
-* **Complete Privacy:** Zero server uploads. All processing happens entirely on the main thread inside your browser. It runs seamlessly offline via `file://`.
-* **GDPR-Compliant Assets:** Map tiles are powered by CartoDB and OpenSeaMap. Typography is served via European-hosted, GAFAM-free Bunny Fonts.
-* **Smart Window Averaging:** Computes noise-resistant peak speeds over consecutive sliding windows (10s, 30s, 1min) instead of relying on fragile single-point GPS peaks.
-* **Wind Physics Engine:** Dynamically calculates True Wind Angle (TWA), Points of Sail distributions, and Velocity Made Good ($VMG$) relative to manually defined wind directions.
-* **Maneuver Detection:** Automatically flags shifts in your tack side to isolate tacks, gybes, or kite transitions, logging transition drift and speed retention scores.
+A browser-based tool for analysing sailing and board-sport GPX tracks. No data leaves your device — everything runs locally in the browser.
 
 ---
 
-## 🎨 Sport Modes Supported
+## Supported Sport Modes
 
-The analytics engine alters its physics thresholds and algorithms dynamically depending on your discipline:
+| Sport | Upwind TWA | Downwind TWA | Maneuvers |
+|---|---|---|---|
+| Kitesurfing | < 87° | > 100° | Transitions (drift / air-time) |
+| Kitefoiling | < 46° | > 135° | Transitions (drift / air-time) |
+| Windsurfing | < 45° | > 140° | Tacks & Gybes (speed quality) |
+| Yacht | < 45° | > 140° | Tacks & Gybes (speed quality) |
 
-| Sport | Emoji | Upwind Threshold | Downwind Threshold | Maneuver Target |
-| --- | --- | --- | --- | --- |
-| **Kitesurfing** | 🪁 | $60^\circ$ | $130^\circ$ | Unified Transitions |
-| **Kitefoiling** | 🦅 | $46^\circ$ | $135^\circ$ | Unified Transitions |
-| **Windsurfing** | 🏄 | $55^\circ$ | $130^\circ$ | Distinct Tacks/Gybes |
-| **Yacht** | ⛵ | $45^\circ$ | $140^\circ$ | Distinct Tacks/Gybes |
+*Upwind TWA and Downwind TWA are the angles that bound the reaching zone. Tack/gybe classification uses the mean TWA of the maneuver (≤ 90° = tack, > 90° = gybe).*
 
 ---
 
-## 🛠️ Architecture & Tech Stack
+## Features
+
+**Privacy first** — All processing is done in-browser. No server, no uploads, no tracking.
+
+**Wind physics engine** — Provide the wind direction (degrees, from which the wind blows) and speed (knots) in the sidebar. The app derives True Wind Angle (TWA), point of sail (upwind / reach / downwind), and VMG for every track point.
+
+**Sliding-window peak speeds** — The best average over 10 s, 30 s, and 60 s is computed across all moving points and shown in the stats panel.
+
+**Maneuver detection** — Each time the boat or board flips from one side of the wind to the other (sign change in TWA sign), a maneuver is recorded. Sail sports (windsurfing, yacht) report the speed quality ratio before/after. Kite sports (kitesurfing, kitefoiling) report the transition duration in seconds and the distance drifted during the jump.
+
+**Coaching insights** — Sport-aware tips are generated from the session statistics (speed, angles, maneuver quality).
+
+**Map coloring** — Track segments are colored by speed or by point of sail, selectable via the toggle at the top of the stats panel.
+
+---
+
+## Technical Notes
+
+### Bearing smoothing
+
+Track bearings are smoothed with a circular moving average to prevent discontinuities at 0°/360°.
+
+```js
+circularMovingAvg(bearings, halfWindow)
+```
+
+### VMG calculations
 
 ```
-[ Raw GPX File ] ──> DOMParser (XML) ──> Physics Enrichment Engine ──> Leaflet Render (Canvas)
-                                                  │
-                                                  └──> Maneuver & Stats Aggregator
-
+VMG_upwind   = speed × cos(TWA)
+VMG_downwind = speed × cos(180° − TWA)
 ```
 
-* **Frontend:** Vanilla HTML5, CSS3 Custom Properties (Design Tokens), and modern ES6+ JavaScript.
-* **Map Engine:** Leaflet.js 1.9 rendering synchronously via SVG/Canvas layers for rapid performance.
-* **Nautical Overlay:** Integrated **OpenSeaMap** tile selector to overlay navigation markers, buoys, and lights on top of CartoDB Voyager base maps.
+VMG_upwind is positive when sailing toward the wind; VMG_downwind is positive when sailing away.
 
 ---
 
-## ⚙️ Mathematical Underpinnings
+## Getting Started
 
-### Smooth Bearings
-
-Traditional heading computations suffer from severe noise at slow speeds. This application mitigates boundary issues at $0^\circ/360^\circ$ by passing trigonometric unit components through a localized moving average before computing the arc-tangent:
-
-$$\theta_{\text{smooth}} = \operatorname{atan2}\left(\overline{\sin\theta}, \overline{\cos\theta}\right)$$
-
-### Velocity Made Good ($VMG$)
-
-The app determines your efficiency directly toward or away from the wind source using the following formulas:
-
-$$\text{VMG}_{\text{Upwind}} = \text{Speed} \times \cos(\text{TWA})$$
-
-$$\text{VMG}_{\text{Downwind}} = \text{Speed} \times \cos(180^\circ - \text{TWA})$$
+1. Save all files (`index.html`, `js/*.js`, `css/*.css`) into one folder.
+2. Open `index.html` in a modern browser (Chrome, Firefox, Edge).
+3. Drag-and-drop one or more GPX files onto the drop zone, or click it to select files.
+4. Set your **sport mode** using the tab bar.
+5. Enter the **wind direction** (from °) and **wind speed** (knots) in the Wind Conditions panel.
+6. Click **Analyse All**.
 
 ---
 
-## 🚀 Getting Started
+## Architecture
 
-1. Save the code into an `index.html` file.
-2. Double-click the file to open it in any modern browser.
-3. Drag and drop up to 6 `.gpx` tracks into the drop zone.
-4. Input the current wind origin angle (e.g., `270` for a West wind), choose your sport, and click **Analyse All Sessions**.
+```
+gpx.js       — GPX XML parsing: extracts time, lat, lon, ele, GPS speed
+geo.js       — Haversine distance, compass bearing, TWA, point-of-sail classification,
+               circular bearing smoothing, sliding-window best-average
+analysis.js  — Track enrichment pipeline, maneuver detection, statistics aggregation
+insights.js  — Sport-aware coaching tip generation
+state.js     — Client-side session registry, active session, wind/sport state
+ui.js        — DOM updates, stat card rendering, insight rendering
+app.js       — Event wiring, analysis orchestration, map rendering
+map.js       — Leaflet map, session polylines, color mode, map bounds
+config.js    — Sport thresholds, speed limits, palette
+```
+
+The app uses **Leaflet** for the map, **SunCalc** for solar metadata, and **Bunny Fonts** for typography. No build step, no dependencies to install.
+
+---
+
+## Data Flow
+
+```
+GPX file
+  └─► parseGPX()          → raw track points [time, lat, lon, ele, speedGPS]
+       └─► enrichTrack()  → enriched points [dist, bearing, bearingSmooth,
+       │                     speedKts, twa, twaSign, pos, vmgUp, vmgDown]
+       │       ├─► detectManeuvers() → [type, speedBefore, speedAfter,
+       │       │                       quality/transitionSec, transitionDistM]
+       │       └─► computeStats()   → session statistics object
+       └─► renderSession() → coloured polylines on the map
+```
