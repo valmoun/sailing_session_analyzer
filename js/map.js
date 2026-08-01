@@ -42,11 +42,9 @@ function trackColor(pt, minSpd, spdRange) {
 // Calculate color on red-green scale based on t value in [0,1], where 0 is red and 1 is green
 function redGreenColor(t) {
   t = Math.max(0, Math.min(1, t));
-
   const r = Math.round(255 * (1 - t));
   const g = Math.round(200 * t);
   const b = 80;
-
   return `rgb(${r},${g},${b})`;
 }
 
@@ -123,7 +121,8 @@ export function renderAllSessions() {
         ? `🔄 Transition #${idx+1}` : (m.type === 'tack' ? `Tack #${idx+1}` : `Gybe #${idx+1}`);
 
       // Color based on quality score
-      const t = Math.pow(m.quality/100, 1.5);
+      const q = (typeof m.quality === 'number') ? m.quality : 0;
+      const t = Math.pow(q/100, 1.5);
       const color = redGreenColor(t);
       
       // Display label of distance lost during maneuver

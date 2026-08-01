@@ -130,13 +130,20 @@ export function detectManeuvers(pts) {
         quality = spBefore > 1 ? Math.max(0, Math.min(100, Math.round((spAfter / spBefore) * 100))): null;
       }
 
+      console.log({
+        spBefore,
+        spAfter,
+        transitionDistM,
+        quality
+      });
+
       maneuvers.push({
         type, index:i, lat:p.lat, lon:p.lon, time:p.time,
         speedBefore:Math.round(spBefore*10)/10,
         speedAfter: Math.round(spAfter*10)/10,
         quality,
         speedRatio: Math.round(spdRatio),
-        //transitionSec,
+        // transitionSec,
         transitionDistM,
       });
 
@@ -185,7 +192,7 @@ export function computeStats(pts, maneuvers) {
   const mean  = arr => arr.length ? Math.round(arr.reduce((a,b)=>a+b,0)/arr.length) : null;
   const avgTackQ     = mean(tacks.map(t=>t.quality).filter(q=>q!=null));
   const avgGybeQ     = mean(gybes.map(g=>g.quality).filter(q=>q!=null));
-  const avgTransSec  = mean(maneuvers.map(m=>m.transitionSec).filter(v=>v!=null));
+  // const avgTransSec  = mean(maneuvers.map(m=>m.transitionSec).filter(v=>v!=null));
   const avgTransDst  = mean(maneuvers.map(m=>m.transitionDistM));
 
   return {
@@ -199,6 +206,7 @@ export function computeStats(pts, maneuvers) {
     bestUpAngle, bestDwnAngle,
     tackCount:tacks.length, gybeCount:gybes.length,
     transCount:maneuvers.length,
-    avgTackQ, avgGybeQ, avgTransSec, avgTransDst,
+    avgTackQ, avgGybeQ, // avgTransSec, 
+    avgTransDst,
   };
 }

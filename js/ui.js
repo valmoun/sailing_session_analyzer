@@ -80,7 +80,7 @@ export function updateUI(stats, maneuvers, currentSport) {
     kE.style.display = 'block'; tE.style.display = gE.style.display = 'none';
     setText('man-kite-lbl',  cfg.manLabel);
     setText('s-trans',       stats.transCount);
-    setText('s-trans-dur',   stats.avgTransSec);
+    //setText('s-trans-dur',   stats.avgTransSec);
     setText('s-trans-drift', stats.avgTransDst);
   } else {
     kE.style.display = 'none'; tE.style.display = gE.style.display = 'block';
